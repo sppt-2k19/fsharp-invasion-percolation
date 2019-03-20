@@ -1,16 +1,12 @@
-﻿// Learn more about F# at http://fsharp.org
+﻿module InvasionPercolation.Program
+// Learn more about F# at http://fsharp.org
 
 open System
 open System.Drawing
 open System.IO
+open System.Numerics
 open System.Threading.Tasks
-
-    //let array = array2D [[26; 12; 72; 45; 38];
-    //              [10; 38; 39; 92; 38];
-    //              [44; 29;  0; 29; 77];
-    //              [61; 26; 90; 35; 11];
-    //              [83; 84; 18; 56; 52]]
-    
+open InvasionPercolation.PriorityQueue
 
 type FillOrResist = Resistance of int | Filled 
     
@@ -23,18 +19,6 @@ let flat2Darray array2D =
             seq { for x in [0..(Array2D.length1 array2D) - 1] do 
                       for y in [0..(Array2D.length2 array2D) - 1] do 
                           yield array2D.[x, y] }
-            
-let OneZeroPrinter matrix =
-    let arr = Array2D.map (fun ele
-                            -> match ele with
-                                 | Filled -> "1"
-                                 | Resistance a -> "0") matrix
-    printfn "Lengths: %d,%d" arr.[0,*].Length arr.[*,0].Length
-    for i in 0 .. arr.[0,*].Length - 1 do
-        printfn ""
-        for j in 0 .. arr.[*,0].Length - 1 do
-            printf "%s" arr.[i,j]
-    printfn "\n---------------"
     
 let toColors matrix = 
     Array2D.mapi (fun i j ele
@@ -58,59 +42,57 @@ let matrixBuilder n seed r =
     let center = n/2
     arr.[center, center] <- Filled
     arr
-    
 
-let findMinIndex (matrixMask:FillOrResist[,], n) =
-    let comIndex i j =
+let findPrioQueue (matrixMask:FillOrResist[,]) n (queue:PriorityQueue<int*(int*int)>) =
+    let comIndex =
         [|      0,-1;
          -1, 0;       1, 0;
                 0, 1
-        |] |> Array.Parallel.map (fun (dx,dy) ->
-            let x,y = i+dx, j+dy
-            if x >= 0 && x < n && y >= 0 && y < n && matrixMask.[x,y] = Filled then
-                1
-            else
-                0
-        ) |> Array.sum
-                
-    Array2D.mapi (fun i j e -> if (comIndex i j) > 0 then (i,j) else (-1,-1)) matrixMask
-            |> flat2Darray
-            |> Seq.filter (fun (a,b) -> not (a = -1) && not (b = -1))
-            |> Seq.map (fun (x,y) -> (x,y,matrixMask.[x,y]))
-            |> Seq.minBy (fun (a,b,c) -> c)
+        |]
     
-let rec invasionPercolation matrixMask n nfill =
+    let q = queue
+    
+    let newEntry = q.Dequeue()
     let m = matrixMask
-    match nfill with
-    | 0 -> m //Done
-    | _ -> 
-        let tup = findMinIndex (m, n)
-        let i,j,e = tup
-        m.[i,j] <- Filled
-        invasionPercolation m n (nfill - 1)
+    m.[fst (snd newEntry), snd (snd newEntry)] <- Filled
     
-
+    for pair in comIndex do
+        let x,y = fst pair + fst (snd newEntry), snd pair + snd (snd newEntry)
+        if x >= 0 && x < n && y >= 0 && y < n then 
+            match m.[x,y] with
+            | Resistance a ->
+                    let res = (a,(x,y))
+                    if not (q.Exists res) then q.Enqueue res
+            | _ -> ()
+    
+    m,q
+let rec invPerPrioHelper matMask n nfill queue =
+    match nfill with
+    | 0 -> matMask //Done
+    | _ ->
+        let m,q = findPrioQueue matMask n queue
+        invPerPrioHelper m n (nfill - 1) q
+        
+        
+let invasionPercolationPriorityQueue n nfill dummy =
+    let R = 5000
+    let matrixMask = matrixBuilder n dummy R
+    let p = new PriorityQueue<int*(int*int)>([||])
+    p.Enqueue(R*2,(n/2, n/2)) //Enqueue center element with a high value
+    invPerPrioHelper matrixMask n nfill p
+    
+let invPercoBenchmark n nfill dummy =
+    let res = invasionPercolationPriorityQueue n nfill dummy
+    float32 res.[0,*].Length //return *some* value so that the result isn't completely optimised away
 
 [<EntryPoint>]
 let main argv =
+    let invPer = invasionPercolationPriorityQueue 200 6000 6
     
-    //Benchmark-related part
-    let n = 200
-    let fill = 1000
-    let R = 5000
-    Parallel.For(0,100, fun i ->
-        let seed = 4312335 * i
-        let mmask = matrixBuilder n seed R
-        let invPer = invasionPercolation mmask n fill
-        
-        
-        
-        //Next part is just for image, not benchmarking
-        let runId = System.Random().Next() //For unique filenames
-        let path = Path.Combine(Directory.GetCurrentDirectory(), "map",
-                                    sprintf "Inv-%i Seed-%i Size-%i Fill-%i.png" runId seed n fill)
-        
-        toColors invPer |> toBitmap |> toFile path |> ignore
-        
-        printfn "Done Percolating \n\tSize: %ix%i\n\tFill: %i\n\tSeed: %i" n n fill seed) |> ignore
+    let path = Path.Combine(Directory.GetCurrentDirectory(), "map", sprintf "Inv-%i.png" DateTime.UtcNow.Millisecond)
+    let colors = (toColors invPer)
+    let bitmap = toBitmap colors
+    let file = toFile path bitmap
+    printfn "Done"
+    
     0 // return an integer exit code
